@@ -12,11 +12,14 @@ import os
 import sys
 import threading
 import warnings
+import json
+import networkx as nx
 
 from utils.morphology_graph import create_directed_graph, set_graph_order
 from utils.synaptic_inputs import add_background_exc_inputs, add_background_inh_inputs, add_clustered_inputs
 from utils.cable_distance import distance_synapse_mark_compare, recur_dist_to_soma, recur_dist_to_root
 from utils.cluster_protocol import generate_indices, generate_vecstim
+from utils.cell3_apical_policy import Cell3ApicalTreePolicy
 from utils.random_streams import (
     cluster_assignment_rng,
     cluster_spike_rng,
@@ -84,9 +87,26 @@ def _mechanisms_available():
     return True
 
 class L5PNModel:
+    @staticmethod
+    def _load_recording_sites(swc_file):
+        config_path = Path(__file__).resolve().parents[1] / 'model' / 'multilocation_recording_sites.json'
+        config = json.loads(config_path.read_text())
+        morphology = Path(str(swc_file)).stem
+        if morphology not in config:
+            raise ValueError(f'No multi-location recording configuration for morphology {morphology!r}')
+        sites = {name: site for name, site in config[morphology].items() if name != "apical_roots"}
+        for name, site in sites.items():
+            if name == 'apical_roots':
+                continue
+            if site is None:
+                continue
+            if site.get('section_type') not in {'apic', 'dend'} or not 0 <= float(site['x']) <= 1:
+                raise ValueError(f'Invalid recording site {morphology}.{name}: {site}')
+        return sites
+
     def __init__(self, swc_file, bg_exc_freq, bg_inh_freq, SIMU_DURATION, STIM_DURATION,
                  bg_syn_pos_seed, bg_spike_gen_seed, clus_spike_gen_seed=None, with_ap=False, with_global_rec=False,
-                 clus_syn_pos_seed=None, max_workers_synapse=30):
+                 clus_syn_pos_seed=None, max_workers_synapse=30, epoch=None):
         """
         Initialize cell with networkx structure.
 
@@ -117,6 +137,14 @@ class L5PNModel:
         h.load_file('./model/L5PCtemplate.hoc')
 
         self.complex_cell = h.L5PCtemplate(swc_file)
+        self.recording_sites = self._load_recording_sites(swc_file)
+        morphology = Path(str(swc_file)).stem
+        for name, site in self.recording_sites.items():
+            if site is None:
+                continue
+            sections = getattr(self.complex_cell, site['section_type'])
+            if int(site['index']) >= len(sections):
+                raise IndexError(f'{morphology}.{name} index {site["index"]} exceeds {len(sections)} sections')
         h.celsius = 37
 
         h.v_init = self.complex_cell.soma[0].e_pas  # -90 mV
@@ -124,7 +152,8 @@ class L5PNModel:
         self.distance_matrix = None
 
         (self.num_syn_basal_exc, self.num_syn_apic_exc, self.num_syn_basal_inh,
-         self.num_syn_apic_inh, self.num_syn_soma_inh) = (0, 0, 0, 0, 0)
+         self.num_syn_basal_prox_inh, self.num_syn_apic_inh,
+         self.num_syn_soma_inh) = (0, 0, 0, 0, 0, 0)
 
         # Seeds are resolved by the caller before L5PNModel is created.
         self.bg_syn_pos_seed = bg_syn_pos_seed
@@ -197,24 +226,77 @@ class L5PNModel:
             return_segment_graph=True,
         )
 
-        # assign the order for each section
-        self.class_dict_soma, self.class_dict_tuft = set_graph_order(self.DiG, self.root_tuft_idx)
-        self.sec_tuft_idx = list(itertools.chain(*self.class_dict_tuft.values()))
+        # Keep cell1's validated single-root behavior.  Other morphologies may
+        # define one or more apical nexus roots; only their descendants are
+        # eligible for apical range assignment, and each section uses the
+        # cable distance to its owning root.
+        self.morphology_id = Path(str(swc_file)).stem
+        config_path = Path(__file__).resolve().parents[1] / 'model' / 'multilocation_recording_sites.json'
+        root_names = json.loads(config_path.read_text())[self.morphology_id]['apical_roots']
+        name_to_id = {name.rsplit('.', 1)[-1]: int(sid)
+                      for name, sid in zip(self.section_df['section_name'], self.section_df['section_id'])}
+        missing = [name for name in root_names if name not in name_to_id]
+        if missing:
+            raise ValueError(f'Apical root sections not found for {self.morphology_id}: {missing}')
+        self.apical_root_ids = [int(name_to_id[name]) for name in root_names]
+        self.apical_root_secs = [self.all_sections[sid][0].sec for sid in self.apical_root_ids]
+        self.cell3_apical_policy = None
+        if self.morphology_id == 'cell3':
+            self.cell3_apical_policy = Cell3ApicalTreePolicy(epoch, root_names)
+            self.cell3_apical_policy.bind(name_to_id, self.DiG)
+            selected_id = self.cell3_apical_policy.selected_root_id
+            selected_sec = self.all_sections[selected_id][0].sec
+            self.sec_tuft_idx = sorted(self.cell3_apical_policy.selected_section_ids)
+            self._section_root_sec = {sid: selected_sec for sid in self.sec_tuft_idx}
+            self.class_dict_soma, self.class_dict_tuft = {}, {}
+        elif self.morphology_id == 'cell1':
+            self.class_dict_soma, self.class_dict_tuft = set_graph_order(self.DiG, self.apical_root_ids[0])
+            self.sec_tuft_idx = list(itertools.chain(*self.class_dict_tuft.values()))
+            self._section_root_sec = {sid: self.apical_root_secs[0] for sid in self.sec_tuft_idx}
+        else:
+            self.sec_tuft_idx = sorted({desc for root in self.apical_root_ids
+                                        for desc in nx.descendants(self.DiG, root)} - set(self.apical_root_ids))
+            self._section_root_sec = {}
+            for root_id, root_sec in zip(self.apical_root_ids, self.apical_root_secs):
+                for sid in nx.descendants(self.DiG, root_id):
+                    if sid not in self.apical_root_ids:
+                        self._section_root_sec[sid] = root_sec
+            self.class_dict_soma, self.class_dict_tuft = {}, {}
 
-    def initialize_synapse_layout(self, num_syn_basal_exc, num_syn_apic_exc, num_syn_basal_inh, num_syn_apic_inh, num_syn_soma_inh):
+    def _distance_to_tuft(self, section, loc, section_id):
+        root_sec = self._section_root_sec.get(int(section_id))
+        return recur_dist_to_root(section, loc, root_sec) if root_sec is not None else -1
+
+    def initialize_synapse_layout(self, num_syn_basal_exc, num_syn_apic_exc, num_syn_basal_inh,
+                                  num_syn_apic_inh, num_syn_soma_inh,
+                                  basal_distal_min_um=0.0, num_syn_basal_prox_inh=0):
+
+        if basal_distal_min_um < 0 or num_syn_basal_prox_inh < 0:
+            raise ValueError('Basal distance and proximal inhibitory count must be nonnegative')
+        if num_syn_basal_prox_inh and basal_distal_min_um <= 0:
+            raise ValueError('Proximal basal inhibition requires a positive basal_distal_min_um')
 
         self.num_syn_basal_exc = num_syn_basal_exc
         self.num_syn_apic_exc = num_syn_apic_exc
         self.num_syn_basal_inh = num_syn_basal_inh
+        self.num_syn_basal_prox_inh = num_syn_basal_prox_inh
         self.num_syn_apic_inh = num_syn_apic_inh
         self.num_syn_soma_inh = num_syn_soma_inh
 
         # add excitatory synapses
-        self._sample_synapse_locations(num_syn_basal_exc, 'basal', 'exc')
+        self._sample_synapse_locations(
+            num_syn_basal_exc, 'basal', 'exc', min_distance=basal_distal_min_um
+        )
         self._sample_synapse_locations(num_syn_apic_exc, 'apical', 'exc')
 
         # add inhibitory synapses
-        self._sample_synapse_locations(num_syn_basal_inh, 'basal', 'inh')
+        self._sample_synapse_locations(
+            num_syn_basal_inh, 'basal', 'inh', min_distance=basal_distal_min_um
+        )
+        self._sample_synapse_locations(
+            num_syn_basal_prox_inh, 'basal', 'inh', max_distance=basal_distal_min_um,
+            seed_index_offset=num_syn_basal_inh,
+        )
         self._sample_synapse_locations(num_syn_apic_inh, 'apical', 'inh')
         self._sample_synapse_locations(num_syn_soma_inh, 'soma', 'inh')
 
@@ -241,8 +323,15 @@ class L5PNModel:
         dist_thres_basal = [0] + [sorted_basal_distances[threshold - 1] for threshold in num_syn_thres
                                   if threshold <= len(sorted_basal_distances)] + [max(sorted_basal_distances)]
 
-        dist_thres_tuft = [0] + [sorted_tuft_distances[threshold - 1] for threshold in num_syn_thres
-                                 if threshold <= len(sorted_tuft_distances)] + [max(sorted_tuft_distances)]
+        # The legacy apic[36] root may have no descendants on another
+        # morphology. Basal clustering does not use these tuft thresholds.
+        if len(sorted_tuft_distances) == 0:
+            if sec_type != 'basal':
+                raise ValueError('No synapses below the legacy tuft root; select a morphology-specific root before apical clustering')
+            dist_thres_tuft = [0, 0]
+        else:
+            dist_thres_tuft = [0] + [sorted_tuft_distances[threshold - 1] for threshold in num_syn_thres
+                                     if threshold <= len(sorted_tuft_distances)] + [max(sorted_tuft_distances)]
 
         num_conn_per_preunit = min(num_conn_per_preunit, num_clusters)
         num_preunit = num_syn_per_clus * np.ceil(num_clusters / 3).astype(int)
@@ -289,10 +378,22 @@ class L5PNModel:
             # Unassigned background synapses for surround synapses
             sec_syn_bg_exc_df = self.section_synapse_df[(self.section_synapse_df['type'] == 'A') &
                                                         (self.section_synapse_df['cluster_flag'] == -1)]
+            if sec_type == 'apical' and self.cell3_apical_policy is not None:
+                sec_syn_bg_exc_df = sec_syn_bg_exc_df[
+                    sec_syn_bg_exc_df['section_id_synapse'].isin(
+                        self.cell3_apical_policy.selected_section_ids
+                    )
+                ]
 
             # Build DataFrame filter: common conditions + sec_type-specific conditions
             bg_exc_cond = (self.section_synapse_df['type'] == 'A') & (self.section_synapse_df['cluster_flag'] == -1)
-            sec_specific_cond = (
+            if sec_type == 'apical' and self.cell3_apical_policy is not None:
+                selected_range_indices = self.cell3_apical_policy.range_indices(
+                    self.section_synapse_df
+                )[dis_to_root]
+                sec_specific_cond = self.section_synapse_df.index.isin(selected_range_indices)
+            else:
+                sec_specific_cond = (
                 (self.section_synapse_df['region'] == 'basal') &
                 (self.section_synapse_df['distance_to_soma'].between(dist_thres_basal[dis_to_root], dist_thres_basal[dis_to_root+1]))
             ) if sec_type == 'basal' else (
@@ -366,7 +467,7 @@ class L5PNModel:
                         # the parent section of the center section
                         # there is no dendritic section on the soma, so we should not choose soma as the parent section
                         # also don't choose the apical nexus section as the parent section
-                        if list(self.DiG.predecessors(syn_pre_sec_id)) not in ([], [0], [121]):
+                        if list(self.DiG.predecessors(syn_pre_sec_id)) not in ([], [0], *[[sid] for sid in self.apical_root_ids]):
                             syn_pre_sec_id = clus_loc_rnd.choice(list(self.DiG.predecessors(syn_pre_sec_id)))
                             try:
                                 syn_pre_sec = sec_syn_bg_exc_df[sec_syn_bg_exc_df['section_id_synapse'] == syn_pre_sec_id]['section_synapse'].values[0]
@@ -528,8 +629,11 @@ class L5PNModel:
         dend_shape = (self.num_clusters_sampled, *common_shape)
 
         # Initialize arrays concisely using dictionary and setattr
-        voltage_arrays = ['soma_v', 'apic_v', 'apic_ica', 'soma_i', 'trunk_v', 'basal_v', 'tuft_v']
-        bg_current_arrays = ['basal_bg_i_nmda', 'basal_bg_i_ampa', 'tuft_bg_i_nmda', 'tuft_bg_i_ampa']
+        voltage_arrays = ['soma_v', 'apic_v', 'apic_ica', 'soma_i', 'trunk_v', 'basal_v']
+        bg_current_arrays = ['basal_bg_i_nmda', 'basal_bg_i_ampa']
+        if self.recording_sites.get('tuft') is not None:
+            voltage_arrays.append('tuft_v')
+            bg_current_arrays.extend(['tuft_bg_i_nmda', 'tuft_bg_i_ampa'])
         dend_arrays = ['dend_v', 'dend_i', 'dend_nmda_i', 'dend_ampa_i', 'dend_nmda_g', 'dend_ampa_g']
         for arr_name in voltage_arrays + bg_current_arrays:
             setattr(self, f'{arr_name}_array', np.zeros(common_shape))
@@ -583,13 +687,16 @@ class L5PNModel:
         arrays_to_save = {
             'soma_v_array': self.soma_v_array, 'apic_v_array': self.apic_v_array, 'apic_ica_array': self.apic_ica_array,
             'soma_i_array': self.soma_i_array, 'trunk_v_array': self.trunk_v_array, 'basal_v_array': self.basal_v_array,
-            'tuft_v_array': self.tuft_v_array, 'basal_bg_i_nmda_array': self.basal_bg_i_nmda_array,
-            'basal_bg_i_ampa_array': self.basal_bg_i_ampa_array, 'tuft_bg_i_nmda_array': self.tuft_bg_i_nmda_array,
-            'tuft_bg_i_ampa_array': self.tuft_bg_i_ampa_array, 'dend_v_array': self.dend_v_array,
+            'basal_bg_i_nmda_array': self.basal_bg_i_nmda_array,
+            'basal_bg_i_ampa_array': self.basal_bg_i_ampa_array, 'dend_v_array': self.dend_v_array,
             'dend_i_array': self.dend_i_array, 'dend_nmda_i_array': self.dend_nmda_i_array,
             'dend_ampa_i_array': self.dend_ampa_i_array, 'dend_nmda_g_array': self.dend_nmda_g_array,
             'dend_ampa_g_array': self.dend_ampa_g_array
         }
+        if self.tuft_v_array is not None:
+            arrays_to_save.update({'tuft_v_array': self.tuft_v_array,
+                                   'tuft_bg_i_nmda_array': self.tuft_bg_i_nmda_array,
+                                   'tuft_bg_i_ampa_array': self.tuft_bg_i_ampa_array})
         if self.with_global_rec:
             if self.seg_v_array is not None:
                 arrays_to_save['seg_v_array'] = self.seg_v_array
@@ -603,7 +710,8 @@ class L5PNModel:
 
         self.section_synapse_df.to_csv(os.path.join(folder_path, 'section_synapse_df.csv'), index=False)
 
-    def _sample_synapse_locations(self, num_syn, region, sim_type):
+    def _sample_synapse_locations(self, num_syn, region, sim_type, *, min_distance=0.0,
+                                  max_distance=None, seed_index_offset=0):
 
         type = 'A' if sim_type == 'exc' else 'B'
 
@@ -624,19 +732,27 @@ class L5PNModel:
 
         def generate_synapse(i):
             syn_rnd = synapse_placement_rng(
-                self.bg_syn_pos_seed, region, sim_type, i
+                self.bg_syn_pos_seed, region, sim_type, i + seed_index_offset
             )
-            section = sections[syn_rnd.choice(len(sections), p=weights)][0].sec
-            section_name = section.psection()['name']
+            for _ in range(10000):
+                section = sections[syn_rnd.choice(len(sections), p=weights)][0].sec
+                loc = float(syn_rnd.uniform())
+                distance_to_soma = recur_dist_to_soma(section, loc)
+                if distance_to_soma >= min_distance and (
+                    max_distance is None or distance_to_soma < max_distance
+                ):
+                    break
+            else:
+                raise RuntimeError(
+                    f'Could not sample {region} {sim_type} synapse in distance interval '
+                    f'[{min_distance}, {max_distance})'
+                )
 
+            section_name = section.psection()['name']
             section_id_synapse = self.section_df.loc[self.section_df['section_name'] == section_name, 'section_id'].iat[0]
             branch_idx = self.section_df.loc[self.section_df['section_name'] == section_name, 'branch_idx'].iat[0]
-
-            loc = float(syn_rnd.uniform())
             segment_synapse = section(loc)
-
-            distance_to_soma = recur_dist_to_soma(section, loc)
-            distance_to_tuft = recur_dist_to_root(section, loc, self.root_tuft_sec) if section_id_synapse in self.sec_tuft_idx else -1
+            distance_to_tuft = self._distance_to_tuft(section, loc, section_id_synapse)
 
             return {
                 'section_id_synapse': section_id_synapse, 'section_synapse': section, 'segment_synapse': segment_synapse,
@@ -679,8 +795,7 @@ class L5PNModel:
             st = self.section_df.iloc[sid]['section_type']
             region[i] = type_to_region.get(st, str(st))
             distance_to_soma[i] = recur_dist_to_soma(seg.sec, seg.x)
-            if sid in self.sec_tuft_idx:
-                distance_to_tuft[i] = recur_dist_to_root(seg.sec, seg.x, self.root_tuft_sec)
+            distance_to_tuft[i] = self._distance_to_tuft(seg.sec, seg.x, sid)
 
         return {
             'segment_index': segment_index,
@@ -691,13 +806,22 @@ class L5PNModel:
 
     def _run_single_trial(self, num_stim, num_aff_fiber, num_trial, folder_path):
 
-        soma_v = h.Vector().record(self.complex_cell.soma[0](0.5)._ref_v)
-        apic_v = h.Vector().record(self.complex_cell.apic[121-85](1)._ref_v)
-        apic_ica = h.Vector().record(self.complex_cell.apic[121-85](1)._ref_ica)
+        def record_site(name, ref_name='_ref_v'):
+            if self.cell3_apical_policy is not None and name in {'apic', 'apic_ica'}:
+                site = self.cell3_apical_policy.recording_site
+            else:
+                site = self.recording_sites[name]
+            if site is None:
+                return None
+            section = getattr(self.complex_cell, site['section_type'])[int(site['index'])]
+            return h.Vector().record(getattr(section(float(site['x'])), ref_name))
 
-        trunk_v = h.Vector().record(self.complex_cell.apic[3](0)._ref_v)
-        basal_v = h.Vector().record(self.complex_cell.apic[71-1](0.8)._ref_v)
-        tuft_v = h.Vector().record(self.complex_cell.apic[152-85](0.5)._ref_v) # the 152th dendrite (tip), L: 192.8, order: 3, distance to root: 565.0
+        soma_v = h.Vector().record(self.complex_cell.soma[0](0.5)._ref_v)
+        apic_v = record_site('apic')
+        apic_ica = record_site('apic_ica', '_ref_ica')
+        trunk_v = record_site('trunk')
+        basal_v = record_site('basal')
+        tuft_v = record_site('tuft')
 
         # EPSC record (VClamp)
         vc = h.SEClamp(self.complex_cell.soma[0](0.5))
@@ -853,7 +977,8 @@ class L5PNModel:
 
             self.trunk_v_array[:, num_stim, num_aff_fiber, num_trial] = np.array(trunk_v)
             self.basal_v_array[:, num_stim, num_aff_fiber, num_trial] = np.array(basal_v)
-            self.tuft_v_array[:, num_stim, num_aff_fiber, num_trial] = np.array(tuft_v)
+            if tuft_v is not None:
+                self.tuft_v_array[:, num_stim, num_aff_fiber, num_trial] = np.array(tuft_v)
 
             try:
                 self.basal_bg_i_nmda_array[:, num_stim, num_aff_fiber, num_trial] = np.average(np.array(basal_bg_i_nmda_list), axis=0)

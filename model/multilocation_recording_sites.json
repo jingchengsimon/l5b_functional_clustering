@@ -1,0 +1,86 @@
+{
+  "cell1": {
+    "apical_roots": ["apic[36]"],
+    "apic": {
+      "section_type": "apic",
+      "index": 36,
+      "x": 1.0
+    },
+    "apic_ica": {
+      "section_type": "apic",
+      "index": 36,
+      "x": 1.0
+    },
+    "trunk": {
+      "section_type": "apic",
+      "index": 3,
+      "x": 0.0
+    },
+    "basal": {
+      "section_type": "apic",
+      "index": 70,
+      "x": 0.8
+    },
+    "tuft": {
+      "section_type": "apic",
+      "index": 67,
+      "x": 0.5
+    }
+  },
+  "cell2": {
+    "apical_roots": ["apic[20]"],
+    "apic": {
+      "section_type": "apic",
+      "index": 20,
+      "x": 1.0
+    },
+    "apic_ica": {
+      "section_type": "apic",
+      "index": 20,
+      "x": 1.0
+    },
+    "trunk": {
+      "section_type": "apic",
+      "index": 18,
+      "x": 0.5
+    },
+    "basal": {
+      "section_type": "dend",
+      "index": 23,
+      "x": 0.5
+    },
+    "tuft": {
+      "section_type": "apic",
+      "index": 29,
+      "x": 0.5
+    }
+  },
+  "cell3": {
+    "apical_roots": ["apic[40]", "apic[72]", "apic[77]", "apic[102]"],
+    "apic": {
+      "section_type": "apic",
+      "index": 102,
+      "x": 1.0
+    },
+    "apic_ica": {
+      "section_type": "apic",
+      "index": 102,
+      "x": 1.0
+    },
+    "trunk": {
+      "section_type": "apic",
+      "index": 39,
+      "x": 0.5
+    },
+    "basal": {
+      "section_type": "dend",
+      "index": 61,
+      "x": 0.5
+    },
+    "tuft": {
+      "section_type": "apic",
+      "index": 104,
+      "x": 0.5
+    }
+  }
+}

@@ -2,16 +2,23 @@ import argparse
 import itertools
 import json
 import os
+import hashlib
+from pathlib import Path
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from utils.random_streams import SEED_FIELDS, resolve_workflow_seeds
+from utils.cell3_apical_policy import Cell3ApicalTreePolicy
 
 # main function
-swc_file_path = './model/cell1.asc'
+DEFAULT_MORPHOLOGY = './model/cell1.asc'
 
 def create_parser():
     """Create and configure argument parser with default values from utils"""
     parser = argparse.ArgumentParser(description='Neuron simulation parameters')
+    parser.add_argument('--morphology', type=str, default=DEFAULT_MORPHOLOGY,
+                        help='Path to the Neurolucida morphology file (default: ./model/cell1.asc)')
+    parser.add_argument('--plot_voltage', action='store_true',
+                        help='Validate saved traces and plot them in results_root/figures')
     
     # Synapse numbers
     parser.add_argument('--num_syn_basal_exc', type=int, default=10042,
@@ -24,6 +31,10 @@ def create_parser():
                         help='Number of apical inhibitory synapses (default: 1637)')
     parser.add_argument('--num_syn_soma_inh', type=int, default=150,
                         help='Number of soma inhibitory synapses (default: 150)')
+    parser.add_argument('--basal_distal_min_um', type=float, default=0.0,
+                        help='Minimum soma cable distance for the main basal excitatory and inhibitory pools (default: 0)')
+    parser.add_argument('--num_syn_basal_prox_inh', type=int, default=0,
+                        help='Additional basal inhibitory synapses below basal_distal_min_um (default: 0)')
     
     # Simulation duration
     parser.add_argument('--simu_duration', type=int, default=1000,
@@ -201,6 +212,15 @@ def build_cell(args):
     clus_syn_pos_seed = seeds.clus_syn_pos
     bg_spike_gen_seed = seeds.bg_spike_gen
     clus_spike_gen_seed = seeds.clus_spike_gen
+    morphology_id = Path(args.morphology).stem
+    recording_config = json.loads(Path('./model/multilocation_recording_sites.json').read_text())[
+        morphology_id
+    ]
+    cell3_policy = (
+        Cell3ApicalTreePolicy(epoch, recording_config['apical_roots'])
+        if morphology_id == 'cell3'
+        else None
+    )
 
     # Build channel_suffix: ensure leading underscore, then append conditional suffixes
     channel_suffix = args.channel_suffix.strip()
@@ -225,11 +245,19 @@ def build_cell(args):
         'cell model': 'L5PN',
         'NUM_SYN_BASAL_EXC': args.num_syn_basal_exc, 'NUM_SYN_APIC_EXC': args.num_syn_apic_exc,
         'NUM_SYN_BASAL_INH': args.num_syn_basal_inh, 'NUM_SYN_APIC_INH': args.num_syn_apic_inh,
+        'NUM_SYN_BASAL_PROX_INH': args.num_syn_basal_prox_inh,
+        'BASAL_DISTAL_MIN_UM': args.basal_distal_min_um,
         'NUM_SYN_SOMA_INH': args.num_syn_soma_inh, 'SIMU DURATION': args.simu_duration,
         'STIM DURATION': args.stim_duration, 'simulation condition': args.simu_cond,
         'synaptic spatial condition': args.spat_cond, 'basal channel type': args.basal_channel_type,
         'channel_suffix': args.channel_suffix, 'seed_suffix_tag': seed_suffix_tag.lstrip('_'),
         'effective_channel_suffix': channel_suffix.lstrip('_'), 'results_root': results_root,
+        'morphology': os.path.abspath(args.morphology),
+        'morphology_id': morphology_id,
+        'morphology_sha256': hashlib.sha256(Path(args.morphology).read_bytes()).hexdigest(),
+        'recording_sites_config': os.path.abspath('./model/multilocation_recording_sites.json'),
+        'recording_sites': recording_config,
+        'cell3_apical_policy': cell3_policy.metadata() if cell3_policy is not None else None,
         'section type': args.sec_type,
         'distance from clusters to root': args.dis_to_root, 'number of clusters': args.num_clusters,
         'cluster radius': args.cluster_radius, 'background excitatory frequency': args.bg_exc_freq,
@@ -259,15 +287,24 @@ def build_cell(args):
     with open(json_filename, 'w') as json_file:
         json.dump(simulation_params, json_file, indent=4)
 
-    cell1 = L5PNModel(swc_file_path, args.bg_exc_freq, args.bg_inh_freq, args.simu_duration, args.stim_duration,
+    cell1 = L5PNModel(args.morphology, args.bg_exc_freq, args.bg_inh_freq, args.simu_duration, args.stim_duration,
                      bg_syn_pos_seed, bg_spike_gen_seed, clus_spike_gen_seed, args.with_ap, args.with_global_rec,
-                     clus_syn_pos_seed=clus_syn_pos_seed, max_workers_synapse=args.max_workers_synapse)
+                     clus_syn_pos_seed=clus_syn_pos_seed, max_workers_synapse=args.max_workers_synapse,
+                     epoch=epoch)
     cell1.initialize_synapse_layout(args.num_syn_basal_exc, args.num_syn_apic_exc, args.num_syn_basal_inh,
-                                    args.num_syn_apic_inh, args.num_syn_soma_inh)
+                                    args.num_syn_apic_inh, args.num_syn_soma_inh,
+                                    basal_distal_min_um=args.basal_distal_min_um,
+                                    num_syn_basal_prox_inh=args.num_syn_basal_prox_inh)
     
     cell1.assign_synapse_clusters(args.basal_channel_type, args.sec_type, args.dis_to_root,
                                   args.num_clusters, args.cluster_radius, args.num_stim, args.stim_time,
                                   args.spat_cond, args.num_conn_per_preunit, args.num_syn_per_clus, folder_path)
+
+    if cell1.cell3_apical_policy is not None:
+        policy_path = Path(folder_path) / 'cell3_apical_policy.json'
+        policy_path.write_text(
+            json.dumps(cell1.cell3_apical_policy.metadata(cell1.section_synapse_df), indent=4) + '\n'
+        )
 
     cell1.run_stimulation_protocol(folder_path, args.simu_cond, args.input_ratio_basal_apic,
                                    args.bg_exc_channel_type, args.initW, args.num_func_group, args.inh_delay, args.num_trials,
@@ -276,6 +313,9 @@ def build_cell(args):
 
     if args.with_global_rec and cell1.seg_v_array is not None:
         save_segment_nmda_spike_rate_npz(cell1, folder_path)
+    if args.plot_voltage:
+        from analysis.figures.plot_multilocation_voltage import plot_run
+        plot_run(folder_path, os.path.join(results_root, 'figures'))
 
 
 def _run_tasks(combinations, max_workers):
@@ -377,7 +417,9 @@ def run_combination(args):
             f'spat_cond={spat_cond} seeds=({seed_summary}) '
             f'({len(combinations)} tasks, max_workers_epoch={args.max_workers_epoch})'
         )
-        _run_tasks(combinations, args.max_workers_epoch)
+        failures = _run_tasks(combinations, args.max_workers_epoch)
+        if failures:
+            raise RuntimeError(f'{len(failures)} simulation tasks failed')
 
 
 if __name__ == "__main__":

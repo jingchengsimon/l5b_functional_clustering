@@ -1,0 +1,51 @@
+{
+  "experiment_id": "l5b-cell23-nmda-bg1-inh4-linear2-50epochs-sjc-20260919",
+  "python": "/G/anaconda3/bin/python",
+  "repo_root": "/G/MIMOlab/Codes/l5b_functional_clustering_cell23_20260919",
+  "results_root": "/G/results/l5b_cell23_nmda_bg1_inh4_linear2_50epochs_20260919_v1",
+  "channel_suffix": "singclus_bg1_inh4_linear2_cell23tree_v1",
+  "max_concurrency": 12,
+  "launch_stagger_seconds": 10,
+  "unit_timeout_seconds": 21600,
+  "max_attempts_per_unit": 3,
+  "cell3_apical_roots": ["apic[40]", "apic[72]", "apic[77]", "apic[102]"],
+  "synapse_counts": {
+    "cell2": {
+      "NUM_SYN_BASAL_EXC": 10649,
+      "NUM_SYN_APIC_EXC": 19133,
+      "NUM_SYN_BASAL_INH": 1085,
+      "NUM_SYN_APIC_INH": 1949,
+      "NUM_SYN_SOMA_INH": 150
+    },
+    "cell3": {
+      "NUM_SYN_BASAL_EXC": 11941,
+      "NUM_SYN_APIC_EXC": 24344,
+      "NUM_SYN_BASAL_INH": 1216,
+      "NUM_SYN_APIC_INH": 2480,
+      "NUM_SYN_SOMA_INH": 150
+    }
+  },
+  "cli": [
+    "--simu_cond", "invivo",
+    "--bg_exc_freq", "1.0",
+    "--bg_inh_freq", "4.0",
+    "--simu_duration", "1000",
+    "--stim_duration", "1000",
+    "--stim_time", "500",
+    "--num_stim", "1",
+    "--num_clusters", "1",
+    "--num_syn_per_clus", "72",
+    "--num_conn_per_preunit", "3",
+    "--num_trials", "1",
+    "--aff_mode", "linear",
+    "--iter_step", "2",
+    "--basal_channel_type", "AMPANMDA",
+    "--bg_exc_channel_type", "AMPANMDA",
+    "--basal_distal_min_um", "0",
+    "--num_syn_basal_prox_inh", "0",
+    "--folder_tag", "1",
+    "--channel_suffix", "singclus_bg1_inh4_linear2_cell23tree_v1",
+    "--max_workers_epoch", "1",
+    "--max_workers_synapse", "4"
+  ]
+}
