@@ -4,7 +4,7 @@
   "repo_root": "/G/MIMOlab/Codes/l5b_functional_clustering_cell23_20260919",
   "results_root": "/G/results/l5b_cell23_nmda_bg1_inh4_linear2_50epochs_20260919_v1",
   "channel_suffix": "singclus_bg1_inh4_linear2_cell23tree_v1",
-  "max_concurrency": 32,
+  "max_concurrency": 48,
   "launch_stagger_seconds": 10,
   "unit_timeout_seconds": 21600,
   "max_attempts_per_unit": 3,
