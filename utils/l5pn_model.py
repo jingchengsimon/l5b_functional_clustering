@@ -124,7 +124,8 @@ class L5PNModel:
         self.distance_matrix = None
 
         (self.num_syn_basal_exc, self.num_syn_apic_exc, self.num_syn_basal_inh,
-         self.num_syn_apic_inh, self.num_syn_soma_inh) = (0, 0, 0, 0, 0)
+         self.num_syn_basal_prox_inh, self.num_syn_apic_inh,
+         self.num_syn_soma_inh) = (0, 0, 0, 0, 0, 0)
 
         # Seeds are resolved by the caller before L5PNModel is created.
         self.bg_syn_pos_seed = bg_syn_pos_seed
@@ -201,20 +202,36 @@ class L5PNModel:
         self.class_dict_soma, self.class_dict_tuft = set_graph_order(self.DiG, self.root_tuft_idx)
         self.sec_tuft_idx = list(itertools.chain(*self.class_dict_tuft.values()))
 
-    def initialize_synapse_layout(self, num_syn_basal_exc, num_syn_apic_exc, num_syn_basal_inh, num_syn_apic_inh, num_syn_soma_inh):
+    def initialize_synapse_layout(self, num_syn_basal_exc, num_syn_apic_exc, num_syn_basal_inh,
+                                  num_syn_apic_inh, num_syn_soma_inh,
+                                  basal_distal_min_um=0.0, num_syn_basal_prox_inh=0):
+
+        if basal_distal_min_um < 0 or num_syn_basal_prox_inh < 0:
+            raise ValueError('Basal distance and proximal inhibitory count must be nonnegative')
+        if num_syn_basal_prox_inh and basal_distal_min_um <= 0:
+            raise ValueError('Proximal basal inhibition requires a positive basal_distal_min_um')
 
         self.num_syn_basal_exc = num_syn_basal_exc
         self.num_syn_apic_exc = num_syn_apic_exc
         self.num_syn_basal_inh = num_syn_basal_inh
+        self.num_syn_basal_prox_inh = num_syn_basal_prox_inh
         self.num_syn_apic_inh = num_syn_apic_inh
         self.num_syn_soma_inh = num_syn_soma_inh
 
         # add excitatory synapses
-        self._sample_synapse_locations(num_syn_basal_exc, 'basal', 'exc')
+        self._sample_synapse_locations(
+            num_syn_basal_exc, 'basal', 'exc', min_distance=basal_distal_min_um
+        )
         self._sample_synapse_locations(num_syn_apic_exc, 'apical', 'exc')
 
         # add inhibitory synapses
-        self._sample_synapse_locations(num_syn_basal_inh, 'basal', 'inh')
+        self._sample_synapse_locations(
+            num_syn_basal_inh, 'basal', 'inh', min_distance=basal_distal_min_um
+        )
+        self._sample_synapse_locations(
+            num_syn_basal_prox_inh, 'basal', 'inh', max_distance=basal_distal_min_um,
+            seed_index_offset=num_syn_basal_inh,
+        )
         self._sample_synapse_locations(num_syn_apic_inh, 'apical', 'inh')
         self._sample_synapse_locations(num_syn_soma_inh, 'soma', 'inh')
 
@@ -603,7 +620,8 @@ class L5PNModel:
 
         self.section_synapse_df.to_csv(os.path.join(folder_path, 'section_synapse_df.csv'), index=False)
 
-    def _sample_synapse_locations(self, num_syn, region, sim_type):
+    def _sample_synapse_locations(self, num_syn, region, sim_type, *, min_distance=0.0,
+                                  max_distance=None, seed_index_offset=0):
 
         type = 'A' if sim_type == 'exc' else 'B'
 
@@ -624,18 +642,26 @@ class L5PNModel:
 
         def generate_synapse(i):
             syn_rnd = synapse_placement_rng(
-                self.bg_syn_pos_seed, region, sim_type, i
+                self.bg_syn_pos_seed, region, sim_type, i + seed_index_offset
             )
-            section = sections[syn_rnd.choice(len(sections), p=weights)][0].sec
-            section_name = section.psection()['name']
+            for _ in range(10000):
+                section = sections[syn_rnd.choice(len(sections), p=weights)][0].sec
+                loc = float(syn_rnd.uniform())
+                distance_to_soma = recur_dist_to_soma(section, loc)
+                if distance_to_soma >= min_distance and (
+                    max_distance is None or distance_to_soma < max_distance
+                ):
+                    break
+            else:
+                raise RuntimeError(
+                    f'Could not sample {region} {sim_type} synapse in distance interval '
+                    f'[{min_distance}, {max_distance})'
+                )
 
+            section_name = section.psection()['name']
             section_id_synapse = self.section_df.loc[self.section_df['section_name'] == section_name, 'section_id'].iat[0]
             branch_idx = self.section_df.loc[self.section_df['section_name'] == section_name, 'branch_idx'].iat[0]
-
-            loc = float(syn_rnd.uniform())
             segment_synapse = section(loc)
-
-            distance_to_soma = recur_dist_to_soma(section, loc)
             distance_to_tuft = recur_dist_to_root(section, loc, self.root_tuft_sec) if section_id_synapse in self.sec_tuft_idx else -1
 
             return {

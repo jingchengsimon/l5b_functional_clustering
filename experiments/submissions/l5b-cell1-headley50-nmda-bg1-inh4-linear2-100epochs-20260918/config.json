@@ -1,0 +1,32 @@
+{
+  "python": "/home/js3269/enter/envs/l5b_amarel_neuron/bin/python",
+  "repo_root": "/home/js3269/projects/l5b_functional_clustering_cell1_headley50",
+  "results_root": "/scratch/js3269/l5b_functional_clustering/results/simulation_cell1_headley50_nmda_bg1_inh4_linear2_100epochs_v1",
+  "channel_suffix": "singclus_headley50_bg1_inh4_linear2",
+  "max_concurrency": 100,
+  "max_waves_per_phase": 5,
+  "cli": [
+    "--simu_cond", "invivo",
+    "--bg_exc_freq", "1.0",
+    "--bg_inh_freq", "4.0",
+    "--simu_duration", "1000",
+    "--stim_duration", "1000",
+    "--stim_time", "500",
+    "--num_stim", "1",
+    "--num_clusters", "1",
+    "--num_syn_per_clus", "72",
+    "--num_conn_per_preunit", "3",
+    "--num_trials", "1",
+    "--aff_mode", "linear",
+    "--iter_step", "2",
+    "--basal_channel_type", "AMPANMDA",
+    "--bg_exc_channel_type", "AMPANMDA",
+    "--basal_distal_min_um", "50.0",
+    "--num_syn_basal_prox_inh", "107",
+    "--num_syn_soma_inh", "150",
+    "--folder_tag", "1",
+    "--channel_suffix", "singclus_headley50_bg1_inh4_linear2",
+    "--max_workers_epoch", "1",
+    "--max_workers_synapse", "4"
+  ]
+}

@@ -24,6 +24,10 @@ def create_parser():
                         help='Number of apical inhibitory synapses (default: 1637)')
     parser.add_argument('--num_syn_soma_inh', type=int, default=150,
                         help='Number of soma inhibitory synapses (default: 150)')
+    parser.add_argument('--basal_distal_min_um', type=float, default=0.0,
+                        help='Minimum soma cable distance for the main basal excitatory and inhibitory pools (default: 0)')
+    parser.add_argument('--num_syn_basal_prox_inh', type=int, default=0,
+                        help='Additional basal inhibitory synapses below basal_distal_min_um (default: 0)')
     
     # Simulation duration
     parser.add_argument('--simu_duration', type=int, default=1000,
@@ -225,6 +229,8 @@ def build_cell(args):
         'cell model': 'L5PN',
         'NUM_SYN_BASAL_EXC': args.num_syn_basal_exc, 'NUM_SYN_APIC_EXC': args.num_syn_apic_exc,
         'NUM_SYN_BASAL_INH': args.num_syn_basal_inh, 'NUM_SYN_APIC_INH': args.num_syn_apic_inh,
+        'NUM_SYN_BASAL_PROX_INH': args.num_syn_basal_prox_inh,
+        'BASAL_DISTAL_MIN_UM': args.basal_distal_min_um,
         'NUM_SYN_SOMA_INH': args.num_syn_soma_inh, 'SIMU DURATION': args.simu_duration,
         'STIM DURATION': args.stim_duration, 'simulation condition': args.simu_cond,
         'synaptic spatial condition': args.spat_cond, 'basal channel type': args.basal_channel_type,
@@ -263,7 +269,9 @@ def build_cell(args):
                      bg_syn_pos_seed, bg_spike_gen_seed, clus_spike_gen_seed, args.with_ap, args.with_global_rec,
                      clus_syn_pos_seed=clus_syn_pos_seed, max_workers_synapse=args.max_workers_synapse)
     cell1.initialize_synapse_layout(args.num_syn_basal_exc, args.num_syn_apic_exc, args.num_syn_basal_inh,
-                                    args.num_syn_apic_inh, args.num_syn_soma_inh)
+                                    args.num_syn_apic_inh, args.num_syn_soma_inh,
+                                    basal_distal_min_um=args.basal_distal_min_um,
+                                    num_syn_basal_prox_inh=args.num_syn_basal_prox_inh)
     
     cell1.assign_synapse_clusters(args.basal_channel_type, args.sec_type, args.dis_to_root,
                                   args.num_clusters, args.cluster_radius, args.num_stim, args.stim_time,
