@@ -85,8 +85,9 @@ def submit_wave(phase, indices, state):
         (experiment / "BLOCKED.json").write_text(json.dumps(blocked, indent=2) + "\n")
         raise RuntimeError(f"{phase} still has {len(indices)} missing units after {attempt - 1} waves")
 
+    submitted_indices = indices[:int(config["max_units_per_wave"])]
     array_job = sbatch(
-        f"--array={compress(indices)}%{config['max_concurrency']}",
+        f"--array={compress(submitted_indices)}%{config['max_concurrency']}",
         f"--job-name=c1h50-{phase}-w{attempt}",
         f"--output={experiment}/logs/%A_%a.out",
         f"--error={experiment}/logs/%A_%a.err",
@@ -106,7 +107,7 @@ def submit_wave(phase, indices, state):
         "phase": phase,
         "attempt": attempt,
         "submitted_at": now(),
-        "units": len(indices),
+        "units": len(submitted_indices),
         "array_job_id": array_job,
         "audit_job_id": audit_job,
     })

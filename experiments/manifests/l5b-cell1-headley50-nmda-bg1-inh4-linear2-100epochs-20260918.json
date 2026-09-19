@@ -11,6 +11,8 @@
   "expected_per_phase": 600,
   "phase_order": ["clus", "distr"],
   "array_throttle": 100,
+  "qos_max_submitted_jobs": 100,
+  "units_per_wave": 99,
   "epochs": [1, 100],
   "aff_levels": [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70, 72],
   "morphology": "model/cell1.asc",
@@ -27,6 +29,6 @@
   "perisomatic_inh": 257,
   "basal_distal_min_um": 50.0,
   "seed_policy": "All four workflow seeds default to epoch and are paired across clus/distr.",
-  "recovery_policy": "One fixed simulation per Slurm array element; --requeue handles preemption; afterany controller audits exact outputs and resubmits only missing/invalid indices, up to five waves per phase.",
+  "recovery_policy": "One fixed simulation per Slurm array element; each wave submits at most 99 units plus one afterany controller to respect the mem QOS 100-job submission limit. --requeue handles preemption; the controller audits all 600 exact outputs and submits the next missing/invalid indices, up to 15 waves per phase.",
   "result_pattern": "/scratch/js3269/l5b_functional_clustering/results/simulation_cell1_headley50_nmda_bg1_inh4_linear2_100epochs_v1/{sec}_range{range}_{spatial}_invivo_singclus_headley50_bg1_inh4_linear2/1/{epoch}"
 }
