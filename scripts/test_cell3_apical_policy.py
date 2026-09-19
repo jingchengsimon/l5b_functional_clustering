@@ -25,11 +25,11 @@ class Cell3ApicalTreePolicyTest(unittest.TestCase):
             'distance_to_tuft': [1, 2, 3, 4, 5, 6, 7, 1, 2.5, 6.5],
         })
         chunks = policy.range_indices(frame)
-        self.assertEqual([len(chunk) for chunk in chunks], [3, 2, 2])
+        self.assertEqual([len(chunk) for chunk in chunks], [2, 2, 3])
         metadata = policy.metadata(frame)
         self.assertEqual(metadata['eligible_exc_count'], 7)
-        self.assertEqual(metadata['exc_counts_by_range'], [3, 2, 2])
-        self.assertEqual(metadata['inh_counts_by_range'], [1, 0, 1])
+        self.assertEqual(metadata['exc_counts_by_range'], [2, 2, 3])
+        self.assertEqual(metadata['inh_counts_by_range'], [0, 1, 1])
 
 
 if __name__ == '__main__':

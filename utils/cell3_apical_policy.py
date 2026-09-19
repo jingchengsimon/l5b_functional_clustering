@@ -60,7 +60,14 @@ class Cell3ApicalTreePolicy:
             raise ValueError(
                 f'Cell3 root {self.selected_root_name} has only {len(eligible)} eligible excitatory synapses'
             )
-        return tuple(np.asarray(chunk.index, dtype=int) for chunk in np.array_split(eligible, 3))
+        ordered_indices = np.asarray(eligible.index, dtype=int)
+        threshold_1 = len(ordered_indices) // 3
+        threshold_2 = 2 * len(ordered_indices) // 3
+        return (
+            ordered_indices[:threshold_1],
+            ordered_indices[threshold_1:threshold_2],
+            ordered_indices[threshold_2:],
+        )
 
     def metadata(self, section_synapse_df=None):
         payload = {
