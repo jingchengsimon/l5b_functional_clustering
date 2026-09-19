@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -61,8 +62,25 @@ def compress(indices):
 
 
 def sbatch(*args):
-    output = subprocess.check_output(["sbatch", "--parsable", *args], text=True).strip()
-    return output.split(";", 1)[0]
+    max_attempts = int(config.get("sbatch_max_attempts", 20))
+    retry_seconds = float(config.get("sbatch_retry_seconds", 30))
+    for attempt in range(1, max_attempts + 1):
+        result = subprocess.run(["sbatch", "--parsable", *args], text=True, capture_output=True)
+        if result.returncode == 0:
+            return result.stdout.strip().split(";", 1)[0]
+
+        error = (result.stderr or result.stdout).strip()
+        qos_limited = "QOSMaxSubmitJobPerUserLimit" in error
+        if not qos_limited or attempt == max_attempts:
+            raise RuntimeError(f"sbatch failed after {attempt} attempt(s): {error}")
+        print(
+            f"[retry] sbatch hit QOSMaxSubmitJobPerUserLimit; "
+            f"attempt={attempt}/{max_attempts}, sleeping={retry_seconds:g}s",
+            flush=True,
+        )
+        time.sleep(retry_seconds)
+
+    raise AssertionError("unreachable")
 
 
 def load_state():
@@ -94,6 +112,18 @@ def submit_wave(phase, indices, state):
         f"--export=ALL,EXPERIMENT={experiment},PHASE={phase}",
         str(worker),
     )
+    wave = {
+        "phase": phase,
+        "attempt": attempt,
+        "submitted_at": now(),
+        "units": len(submitted_indices),
+        "array_job_id": array_job,
+        "audit_job_id": None,
+    }
+    state["waves"].append(wave)
+    state["status"] = f"awaiting_audit_{phase}"
+    save_state(state)
+
     audit_job = sbatch(
         f"--dependency=afterany:{array_job}",
         f"--job-name=c1h50-audit-{phase}-w{attempt}",
@@ -103,17 +133,10 @@ def submit_wave(phase, indices, state):
         str(controller),
         "audit",
     )
-    state["waves"].append({
-        "phase": phase,
-        "attempt": attempt,
-        "submitted_at": now(),
-        "units": len(submitted_indices),
-        "array_job_id": array_job,
-        "audit_job_id": audit_job,
-    })
+    wave["audit_job_id"] = audit_job
     state["status"] = f"running_{phase}"
     save_state(state)
-    print(json.dumps(state["waves"][-1], indent=2))
+    print(json.dumps(wave, indent=2))
 
 
 mode = sys.argv[1]

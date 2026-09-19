@@ -4,8 +4,10 @@
   "results_root": "/scratch/js3269/l5b_functional_clustering/results/simulation_cell1_headley50_nmda_bg1_inh4_linear2_100epochs_v1",
   "channel_suffix": "singclus_headley50_bg1_inh4_linear2",
   "max_concurrency": 100,
-  "max_units_per_wave": 99,
+  "max_units_per_wave": 98,
   "max_waves_per_phase": 15,
+  "sbatch_max_attempts": 20,
+  "sbatch_retry_seconds": 30,
   "cli": [
     "--simu_cond", "invivo",
     "--bg_exc_freq", "1.0",
